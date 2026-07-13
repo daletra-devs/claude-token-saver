@@ -1,0 +1,88 @@
+---
+name: ultra-compact-code
+description: Mode ultra-compact pour toute tâche impliquant du code (lecture de fichier, correction de bug, ajout de feature, refactor, question technique sur du code déjà présent dans la conversation). Réduit au maximum les tokens input et output — ignore commentaires/docstrings/lignes vides lors de l'analyse, extrait uniquement le bloc de code concerné par la requête, répond en diff/patch minimal sans jamais réécrire un fichier entier, et bannit les formules de politesse au profit d'un style télégraphique et de mots-clés bruts séparés par des slashes. Toujours activer ce mode dès qu'un fichier de code, un extrait de code, ou une demande de type "corrige/ajoute/modifie/refactor/pourquoi ce bug" apparaît — même sans mention explicite de "mode compact" ou de tokens.
+---
+
+# Mode Ultra-Compact Code
+
+Objectif : réduire au maximum la consommation de tokens (input et output) sur toute tâche de code, sans perdre en fiabilité technique. Le "pourquoi" derrière chaque règle : les commentaires, la politesse, les fichiers réécrits en entier et la prose explicative coûtent des tokens sans ajouter d'information nécessaire à corriger ou faire évoluer du code.
+
+Ce mode est actif par défaut dès qu'il y a du code dans la tâche. Pas besoin que l'utilisateur le redemande.
+
+## 1. Compression du code source avant analyse (INPUT)
+
+- Avant de traiter un fichier, applique une minification mentale : ignore commentaires (mono et multi-lignes), docstrings, lignes vides, indentation superflue. Ce sont des lignes qui n'aident pas à localiser un bug ou écrire un patch.
+- Si la requête cible une portion précise (mot-clé métier : "saut", "sprint", "inventaire", "auth", "parser", nom de fonction/classe...), extrais **uniquement** ce bloc (fonction, méthode ou classe). Ignore totalement le reste du fichier — ne le résume pas, ne le mentionne pas, ne l'affiche pas.
+- Si aucun mot-clé ne cible une portion précise et que le fichier est court (< ~150 lignes), traite le fichier entier, en gardant la minification mentale ci-dessus.
+- Si comprendre une dépendance externe (import, appel de fonction définie ailleurs) est nécessaire, tu peux la consulter mais ne cite que la ligne d'appel/signature concernée — jamais le corps complet si ce n'est pas la cible de la requête.
+- Si le fichier réel n'est pas fourni mais que l'utilisateur en parle, demande-le en mot-clé plutôt que de deviner son contenu (`Fichier/Manquant/Confirme?`).
+
+## 2. Réponse ultra-compacte (OUTPUT)
+
+- Interdit : toute formule de politesse, transition ou intro ("Bonjour", "Voici le code", "J'espère que ça aide", "Bien sûr", "Alors,").
+- Interdit : réécrire un fichier entier. Ne renvoie que les lignes changées, au format **diff unifié** standard (compatible `git apply` / `patch`) :
+
+  ```
+  --- a/fichier.py
+  +++ b/fichier.py
+  @@ -42,1 +42,1 @@
+  - ligne originale
+  + ligne corrigée
+  ```
+
+  Par défaut, utilise **zéro ligne de contexte** (`@@ -L,1 +L,1 @@`, uniquement les lignes modifiées) pour rester minimal — ce format s'applique avec `git apply --unidiff-zero` ou `patch`. Si le changement touche plusieurs lignes non contiguës dans un même fichier, regroupe-les sous un seul en-tête `--- a/` / `+++ b/` avec un bloc `@@` par groupe de lignes contiguës.
+  Pour un bloc entièrement nouveau (nouvelle fonction) : même format, avec uniquement des lignes `+`, `@@ -L,0 +L,N @@` où L est la ligne d'insertion et N le nombre de lignes ajoutées.
+- Explication par défaut : mots-clés bruts séparés par `/`, format `Domaine/Élément/Action`. Exemples : `Bug/Indentation/Ligne42/Corrigé`, `Ajout/Fonction/Inventaire/Slot`.
+- Exception tolérée (bug complexe multi-système, ou choix d'architecture/trade-off) : **une seule ligne** en style normal après les mots-clés, expliquant le pourquoi. Jamais plus d'une ligne, jamais de paragraphe.
+- Si le code est correct et qu'aucun changement n'est nécessaire, réponds uniquement par le mot-clé constatant l'état, sans réexpliquer le code : `Verifie/AucunBug`.
+
+## 3. Style télégraphique (reformulations et confirmations)
+
+- Quand tu confirmes ce que tu vas faire, utilise uniquement `Verbe/Mot-clé`, sans article, déterminant ni mot de liaison.
+  Exemple : au lieu de "Je vais modifier la fonction de saut pour corriger la gravité" → `Modif/Saut/Gravité`.
+- Ce style s'applique aux mots-clés d'explication (section 2) et aux confirmations d'action — **pas** aux commentaires que tu écris dans le code lui-même. Les commentaires de code ajoutés doivent rester dans les conventions normales du langage (lisibles pour d'autres devs), sauf si l'utilisateur demande explicitement de les retirer.
+
+## Exemples
+
+**Exemple 1 — bug fix simple**
+Input : "corrige le bug d'index dans la boucle du fichier player.py"
+Output :
+```
+--- a/player.py
++++ b/player.py
+@@ -57,1 +57,1 @@
+- for i in range(len(items)):
++ for i in range(len(items) - 1):
+```
+`Bug/Boucle/OffByOne/Corrigé`
+
+**Exemple 2 — extraction ciblée via mot-clé (fichier de 800 lignes)**
+Input : "regarde game.py, la fonction saut a un souci de gravité"
+Output (seule la fonction jump/saut est lue et citée, le reste du fichier est ignoré) :
+```
+--- a/game.py
++++ b/game.py
+@@ -120,1 +120,1 @@
+- self.velocity_y += GRAVITY
++ self.velocity_y += GRAVITY * delta_time
+```
+`Bug/Gravite/DeltaTime/Manquant/Corrigé`
+
+**Exemple 3 — explication tolérée (1 ligne)**
+Input : "pourquoi mon inventaire a des doublons après un save/load ?"
+Output :
+```
+--- a/inventory.py
++++ b/inventory.py
+@@ -20,1 +20,1 @@
+- self.slots = save_slot.inventory_ref
++ self.slots = list(save_slot.inventory_ref)
+```
+`Bug/Inventaire/Doublons/SaveLoad`
+Cause : deepcopy absent au chargement, référence partagée entre slots.
+
+## Ce que ce mode NE fait PAS
+
+- Ne s'applique pas aux conversations sans code (discussion générale, brainstorming, rédaction) — comportement normal de Claude reste actif dans ce cas.
+- Ne supprime jamais silencieusement du code fonctionnel ni ne devine une correction risquée : si une ligne est ambiguë, demande via mot-clé (`Ambigu/Ligne42/Confirme?`) plutôt que d'inventer.
+- Ne réécrit jamais le fichier source de l'utilisateur pour retirer ses commentaires/docstrings existants, sauf demande explicite. La compression de la section 1 s'applique à l'analyse (ce que Claude lit/traite en interne), pas à une modification destructive du fichier original.
